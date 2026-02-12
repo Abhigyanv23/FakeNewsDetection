@@ -1,0 +1,190 @@
+# 1. Mount your Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+
+# 2. Import the necessary library
+import pandas as pd
+
+# 3. Load the datasets
+df_true = pd.read_csv('/content/drive/MyDrive/True.csv')
+df_fake = pd.read_csv('/content/drive/MyDrive/Fake.csv')
+
+# 4. Add the binary labels
+df_true['label'] = 1  # 1 for Real News
+df_fake['label'] = 0  # 0 for Fake News
+
+# 5. Combine and shuffle the data
+# axis=0 stacks them vertically. frac=1 and random_state ensure a complete, reproducible shuffle.
+df = pd.concat([df_true, df_fake], axis=0).sample(frac=1, random_state=42).reset_index(drop=True)
+
+# 6. Verify it worked
+print(f"Total combined articles: {len(df)}")
+df.head()
+----------------------------------------------------------------------------------------------------------
+# 1. Import Keras preprocessing tools
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import numpy as np
+
+# 2. Define standard NLP parameters
+# We limit to the top 10,000 most frequent words to save memory
+max_vocab = 10000
+# We cut off or pad articles to exactly 300 words
+max_len = 300
+
+print("Starting tokenization... this might take a minute.")
+
+# 3. Initialize and fit the Tokenizer
+# <OOV> stands for "Out Of Vocabulary" (words not in our top 10k)
+tokenizer = Tokenizer(num_words=max_vocab, oov_token="<OOV>")
+tokenizer.fit_on_texts(df['text'])
+
+# 4. Convert text strings into sequences of numbers
+sequences = tokenizer.texts_to_sequences(df['text'])
+
+# 5. Pad the sequences
+# 'post' means we add zeros at the end if the article is shorter than 300 words
+padded_docs = pad_sequences(sequences, maxlen=max_len, padding='post', truncating='post')
+
+# 6. Extract the labels as a NumPy array for the model
+labels = df['label'].values
+
+# 7. Verify the shapes
+print(f"Shape of padded data: {padded_docs.shape}")
+print(f"Shape of labels: {labels.shape}")
+print(f"Sample of a vectorized article:\n{padded_docs[0][:20]}...")
+-----------------------------------------------------------------------------------------------------------
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Input, Embedding, LSTM, Bidirectional, Dense, Dropout
+
+# (Assuming max_vocab = 10000 and max_len = 300 from your previous tokenization cell)
+
+# 1. Define the Bi-LSTM Architecture (Updated for Keras 3)
+def create_local_model():
+    model = Sequential([
+        # FIX: Explicit Input layer so Keras builds weights immediately
+        Input(shape=(max_len,)),
+
+        # Removed the deprecated 'input_length' argument
+        Embedding(input_dim=max_vocab, output_dim=64),
+
+        Bidirectional(LSTM(64, return_sequences=True)),
+        Bidirectional(LSTM(32)),
+        Dense(32, activation='relu'),
+        Dropout(0.5),
+        Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+
+# 2. Split the data into 5 virtual clients
+num_clients = 5
+X_clients = np.array_split(padded_docs, num_clients)
+y_clients = np.array_split(labels, num_clients)
+
+print(f"Data successfully split among {num_clients} edge clients.")
+
+# 3. Initialize the Global Model (Server-side)
+global_model = create_local_model()
+num_communication_rounds = 5
+
+print("Starting Federated Learning Simulation...\n")
+
+# 4. The Federated Learning Loop
+for round_num in range(num_communication_rounds):
+    print(f"--- Global Communication Round {round_num + 1} ---")
+
+    # Store the weights from all clients for this round
+    client_weights = []
+
+    # Loop through each client
+    for client_idx in range(num_clients):
+        # Create a local model for the client
+        local_model = create_local_model()
+
+        # Download the latest weights from the global server
+        local_model.set_weights(global_model.get_weights())
+
+        # Train locally on the client's private data for 1 epoch
+        print(f"   Training Client {client_idx + 1}...")
+        local_model.fit(
+            X_clients[client_idx],
+            y_clients[client_idx],
+            epochs=1,
+            batch_size=64,
+            verbose=0 # Change to 1 if you want to see the loading bar
+        )
+
+        # Save the updated weights to send back to the server
+        client_weights.append(local_model.get_weights())
+
+    # 5. Aggregation phase (FedAvg)
+    new_global_weights = []
+    for weights_list_tuple in zip(*client_weights):
+        # Average the weights for each specific layer across all 5 clients
+        layer_mean = np.array(weights_list_tuple).mean(axis=0)
+        new_global_weights.append(layer_mean)
+
+    # Update the global model with the newly averaged weights
+    global_model.set_weights(new_global_weights)
+
+    # 6. Evaluate how the global model is improving
+    loss, accuracy = global_model.evaluate(padded_docs[:1000], labels[:1000], verbose=0)
+    print(f"-> Global Model Accuracy after Round {round_num + 1}: {accuracy * 100:.2f}%\n")
+
+print("Federated Training Complete!")
+-----------------------------------------------------------------------------------------------------------------------------
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+print("Evaluating Global Model on a larger sample...\n")
+
+# Use a chunk of the dataset to test
+X_test = padded_docs[:5000]
+y_true = labels[:5000]
+
+# Generate predictions
+predictions = global_model.predict(X_test)
+y_pred = (predictions > 0.5).astype(int) # Convert probabilities to 0 or 1
+
+# 1. Print the Classification Report (Precision, Recall, F1-Score)
+print(classification_report(y_true, y_pred, target_names=['Fake (0)', 'Real (1)']))
+
+# 2. Generate and Plot the Confusion Matrix
+cm = confusion_matrix(y_true, y_pred)
+
+plt.figure(figsize=(6, 4))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Predicted Fake', 'Predicted Real'],
+            yticklabels=['Actually Fake', 'Actually Real'])
+plt.title('Global Model Confusion Matrix')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.show()
+-----------------------------------------------------------------------------------------------------------------------------
+import numpy as np
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+def predict_fake_news(text, model, tokenizer, max_len=300):
+    # 1. Convert the raw text into a sequence of numbers
+    sequence = tokenizer.texts_to_sequences([text])
+
+    # 2. Pad the sequence to match the 300-word limit
+    padded_sequence = pad_sequences(sequence, maxlen=max_len, padding='post')
+
+    # 3. Get the prediction probability from the Global Model
+    prediction = model.predict(padded_sequence)[0][0]
+
+    # 4. Interpret the result
+    if prediction > 0.5:
+        print(f"Prediction: REAL NEWS (Confidence: {prediction*100:.2f}%)")
+    else:
+        print(f"Prediction: FAKE NEWS (Confidence: {(1-prediction)*100:.2f}%)")
+
+# --- Try it out! ---
+sample_news = """A new public health campaign encourages vaccination awareness."""
+print(f"Input Text: '{sample_news}'")
+predict_fake_news(sample_news, global_model, tokenizer)
+----------------------------------------------------------------------------------------------------------------------------
