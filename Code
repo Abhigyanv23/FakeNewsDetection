@@ -1,26 +1,26 @@
-# 1. Mount your Google Drive
+# Mount your Google Drive
 from google.colab import drive
 drive.mount('/content/drive')
 
-# 2. Import the necessary library
+# Import the necessary library
 import pandas as pd
 
-# 3. Load the datasets
+# Load the datasets
 df_true = pd.read_csv('/content/drive/MyDrive/True.csv')
 df_fake = pd.read_csv('/content/drive/MyDrive/Fake.csv')
 
-# 4. Add the binary labels
+# Add the binary labels
 df_true['label'] = 1  # 1 for Real News
 df_fake['label'] = 0  # 0 for Fake News
 
-# 5. Combine and shuffle the data
+# Combine and shuffle the data
 # axis=0 stacks them vertically. frac=1 and random_state ensure a complete, reproducible shuffle.
 df = pd.concat([df_true, df_fake], axis=0).sample(frac=1, random_state=42).reset_index(drop=True)
 
-# 6. Verify it worked
+# Verify it worked
 print(f"Total combined articles: {len(df)}")
 df.head()
-----------------------------------------------------------------------------------------------------------
+#=================================================================================================
 # 1. Import Keras preprocessing tools
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -53,7 +53,7 @@ labels = df['label'].values
 print(f"Shape of padded data: {padded_docs.shape}")
 print(f"Shape of labels: {labels.shape}")
 print(f"Sample of a vectorized article:\n{padded_docs[0][:20]}...")
------------------------------------------------------------------------------------------------------------
+#========================================================================================================
 import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, Embedding, LSTM, Bidirectional, Dense, Dropout
@@ -134,7 +134,7 @@ for round_num in range(num_communication_rounds):
     print(f"-> Global Model Accuracy after Round {round_num + 1}: {accuracy * 100:.2f}%\n")
 
 print("Federated Training Complete!")
------------------------------------------------------------------------------------------------------------------------------
+#========================================================================================================================
 from sklearn.metrics import classification_report, confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -163,7 +163,7 @@ plt.title('Global Model Confusion Matrix')
 plt.ylabel('True Label')
 plt.xlabel('Predicted Label')
 plt.show()
------------------------------------------------------------------------------------------------------------------------------
+#=============================================================================================================
 import numpy as np
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
@@ -187,4 +187,4 @@ def predict_fake_news(text, model, tokenizer, max_len=300):
 sample_news = """A new public health campaign encourages vaccination awareness."""
 print(f"Input Text: '{sample_news}'")
 predict_fake_news(sample_news, global_model, tokenizer)
-----------------------------------------------------------------------------------------------------------------------------
+#=================================================================================================================
